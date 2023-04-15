@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <time.h>
 #include <math.h>
+#include <float.h>
 #include <CL/cl.h>
 
 #define MAX_SOURCE_SIZE (0x100000)
@@ -61,24 +62,20 @@ void checkWithReferenceMatrix(int m, int n, int k, float* matrixA, float* matrix
     float* matrixCReference = (float*)malloc(m*n*sizeof(float));
         multiplyMatricesReference(m, n, k, matrixA, matrixB, matrixCReference);
 
-        int same = 1;
-
         printf("Comparing matrices...\n");
+
+        double sumOfDifferences = 0;
+        double maxDifference = 0;
+
         for(int i = 0; i < m; i++) {
             for(int j = 0; j < n; j++) {
-                // TODO: Make float comparison more precise and generalized
-                if(fabs(matrixC[i*n + j] - matrixCReference[i*n +j]) > 0.001) {
-                    printf("Computed Matrix and Reference Matrix are not the same: %f %f\n", matrixC[i*n+j], matrixCReference[i*n+j]);
-                    same = 0;
-                    break;
-                }
+                double dif = fabs(matrixC[i*n + j] - matrixCReference[i*n +j]);
+                sumOfDifferences += dif;
+                maxDifference = fmax(maxDifference, dif);
             }
-            if (!same) break;
         }
 
-        if(same) {
-            printf("Computed Matrix and Reference Matrix are the same!\n");
-        }
+        printf("Average difference between OpenCL and Reference result: %e\nMaximum difference between OpenCL and Reference result: %e\n", sumOfDifferences / (n*m), maxDifference);
 
         free(matrixCReference);
 }
@@ -165,7 +162,7 @@ int main (int argc, char* argv[]) {
     
         errorCode = clEnqueueReadBuffer(commandQueue, matrixCOuputBuffer, CL_TRUE, 0, m*n*sizeof(float), (void*)matrixC, 0, NULL, NULL);
     }
-    
+
     checkWithReferenceMatrix(m, n, k, matrixA, matrixB, matrixC);
 
     free(matrixA);
@@ -190,5 +187,4 @@ int main (int argc, char* argv[]) {
     free(times);
 
     printf("Average Kernel Execution Time: %f ns\nStandard Deviation: %f ns\n", averageTime, standardDeviation);
-    printf("%f %f\n", standardDeviation/1000000, averageTime/1000000);
 }
