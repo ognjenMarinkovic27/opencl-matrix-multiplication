@@ -5,6 +5,7 @@
 #include <CL/cl.h>
 
 #define MAX_SOURCE_SIZE (0x100000)
+#define LOCAL_WORK_SIZE 4
 
 void printDeviceData(cl_device_id device_id) {
     char deviceName[64];
@@ -80,35 +81,90 @@ void checkWithReferenceMatrix(int m, int n, int k, float* matrixA, float* matrix
         free(matrixCReference);
 }
 
+cl_int performIteration(
+    int iteration,
+    cl_context context, 
+    cl_command_queue commandQueue, 
+    cl_program program,
+    int m, int n, int k,
+    cl_mem matrixAInputBuffer,
+    cl_mem matrixBInputBuffer, 
+    cl_mem matrixCOutputBuffer, 
+    float* matrixA, float* matrixB, float* matrixC, 
+    cl_ulong* times) {
+
+    cl_int errorCode;
+
+    /* Moving data to buffers on the device */
+    errorCode = clEnqueueWriteBuffer(commandQueue, matrixAInputBuffer, CL_TRUE, 0, m*k*sizeof(float), (void*)matrixA, 0, NULL, NULL);
+    errorCode = clEnqueueWriteBuffer(commandQueue, matrixBInputBuffer, CL_TRUE, 0, k*n*sizeof(float), (void*)matrixB, 0, NULL, NULL);
+
+    /* Creating Kernel and Supplying Arguments */
+    cl_kernel kernel = clCreateKernel(program, "multiply_matrices", &errorCode);
+    errorCode = clSetKernelArg(kernel, 0, sizeof(int), (void*)&m);
+    errorCode = clSetKernelArg(kernel, 1, sizeof(int), (void*)&n);
+    errorCode = clSetKernelArg(kernel, 2, sizeof(int), (void*)&k);
+    errorCode = clSetKernelArg(kernel, 3, sizeof(cl_mem), (void*)&matrixAInputBuffer);
+    errorCode = clSetKernelArg(kernel, 4, sizeof(cl_mem), (void*)&matrixBInputBuffer);
+    errorCode = clSetKernelArg(kernel, 5, sizeof(cl_mem), (void*)&matrixCOutputBuffer);
+
+    /* Defining Problem Size */
+    const int localSize = LOCAL_WORK_SIZE;
+    const size_t local[2] = { localSize, localSize };
+    const size_t global[2] = { m, n };
+
+    /* Executing Kernel */
+    cl_event kernelExecutionEvent;
+    errorCode = clEnqueueNDRangeKernel(commandQueue, kernel, 2, NULL, global, local, 0, NULL, &kernelExecutionEvent);
+    
+    /* Waiting for Kernel to Finish */
+    clFinish(commandQueue);
+
+    /* Calculating time spent executing */
+    cl_ulong startTime, endTime;
+    errorCode = clGetEventProfilingInfo(kernelExecutionEvent, CL_PROFILING_COMMAND_START, sizeof(startTime), &startTime, NULL);
+    errorCode = clGetEventProfilingInfo(kernelExecutionEvent, CL_PROFILING_COMMAND_END, sizeof(endTime), &endTime, NULL);
+
+    printf("Iteration %d: Start Time: %lu. End Time: %lu. Execution time: %lu ns\n", iteration, startTime, endTime, endTime - startTime);
+    times[iteration] = endTime - startTime;
+
+    /* Reading Output From Device */
+    errorCode = clEnqueueReadBuffer(commandQueue, matrixCOutputBuffer, CL_TRUE, 0, m*n*sizeof(float), (void*)matrixC, 0, NULL, NULL);
+
+    return errorCode;
+}
+
 int main (int argc, char* argv[]) {
     
     srand(time(NULL));
 
     int m, n, k, numberOfRuns;
 
+    /* Reading command line arguments */
     sscanf(argv[1], "%d", &m);
     sscanf(argv[2], "%d", &n);
     sscanf(argv[3], "%d", &k);
     sscanf(argv[4], "%d", &numberOfRuns);
 
+    /* Getting Default Device ID */
     cl_device_id device_id = NULL;   
     cl_uint ret_num_devices;
     cl_int errorCode = clGetDeviceIDs(NULL, CL_DEVICE_TYPE_DEFAULT, 1, &device_id, &ret_num_devices);
 
     printDeviceData(device_id);
-
-    cl_ulong* times = (cl_ulong*)malloc(sizeof(cl_ulong) * numberOfRuns);
-
+    
+    /* Creating context and command queue */
     cl_context context = clCreateContextFromType(NULL, CL_DEVICE_TYPE_DEFAULT, NULL, NULL, &errorCode);
     cl_command_queue commandQueue = clCreateCommandQueue(context, device_id, CL_QUEUE_PROFILING_ENABLE, &errorCode);
 
+    /* Creating Input Buffers */
     cl_mem matrixAInputBuffer = clCreateBuffer(context, CL_MEM_READ_ONLY, m*k*sizeof(float), NULL, &errorCode);
     cl_mem matrixBInputBuffer = clCreateBuffer(context, CL_MEM_READ_ONLY, k*n*sizeof(float), NULL, &errorCode);
 
+    /* Reading Kernel From Source File */
     FILE* kernelFile;
     char* sourceString;
     size_t sourceSize;
-
     kernelFile = fopen("multiply_matrices.cl", "r");
     if (!kernelFile) {
         fprintf(stderr, "Failed to load kernel.\n");
@@ -118,49 +174,30 @@ int main (int argc, char* argv[]) {
     sourceSize = fread(sourceString, 1, MAX_SOURCE_SIZE, kernelFile);
     fclose(kernelFile);
 
+    /* Creating and Building Program */
     cl_program program = clCreateProgramWithSource(context, 1, (const char**)&sourceString, (const size_t*)&sourceSize, &errorCode);
-
     errorCode = clBuildProgram(program, 1, &device_id, NULL, NULL, NULL);
 
+    /* Allocating space for the Host Matrices */
     float* matrixA = (float*)malloc(m*k*sizeof(float));
     float* matrixB = (float*)malloc(k*n*sizeof(float));
-
     float* matrixC = (float*)malloc(m*n*sizeof(float));
 
     generateInputMatrices(m, n, k, matrixA, matrixB);
 
+    /* An array to store the times taken for each run */
+    cl_ulong* times = (cl_ulong*)malloc(sizeof(cl_ulong) * numberOfRuns);
+
+    /* Creating output buffer */
+    cl_mem matrixCOutputBuffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY, m*n*sizeof(float), NULL, &errorCode);
+
     for(int i = 0; i < numberOfRuns; i++) {
-        cl_mem matrixCOuputBuffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY, m*n*sizeof(float), NULL, &errorCode);
-
-        errorCode = clEnqueueWriteBuffer(commandQueue, matrixAInputBuffer, CL_TRUE, 0, m*k*sizeof(float), (void*)matrixA, 0, NULL, NULL);
-        errorCode = clEnqueueWriteBuffer(commandQueue, matrixBInputBuffer, CL_TRUE, 0, k*n*sizeof(float), (void*)matrixB, 0, NULL, NULL);
-
-        cl_kernel kernel = clCreateKernel(program, "multiply_matrices", &errorCode);
-
-        errorCode = clSetKernelArg(kernel, 0, sizeof(int), (void*)&m);
-        errorCode = clSetKernelArg(kernel, 1, sizeof(int), (void*)&n);
-        errorCode = clSetKernelArg(kernel, 2, sizeof(int), (void*)&k);
-        errorCode = clSetKernelArg(kernel, 3, sizeof(cl_mem), (void*)&matrixAInputBuffer);
-        errorCode = clSetKernelArg(kernel, 4, sizeof(cl_mem), (void*)&matrixBInputBuffer);
-        errorCode = clSetKernelArg(kernel, 5, sizeof(cl_mem), (void*)&matrixCOuputBuffer);
-
-        const int localSize = 4;
-
-        const size_t local[2] = { localSize, localSize };
-        const size_t global[2] = { m, n };
-
-        cl_event kernelExecutionEvent;
-        errorCode = clEnqueueNDRangeKernel(commandQueue, kernel, 2, NULL, global, NULL, 0, NULL, &kernelExecutionEvent);
-        
-        clFinish(commandQueue);
-        cl_ulong startTime, endTime;
-        errorCode = clGetEventProfilingInfo(kernelExecutionEvent, CL_PROFILING_COMMAND_START, sizeof(startTime), &startTime, NULL);
-        errorCode = clGetEventProfilingInfo(kernelExecutionEvent, CL_PROFILING_COMMAND_END, sizeof(endTime), &endTime, NULL);
-
-        printf("Iteration %d: Start Time: %lu. End Time: %lu. Execution time: %lu ns\n", i, startTime, endTime, endTime - startTime);
-        times[i] = endTime - startTime;
-    
-        errorCode = clEnqueueReadBuffer(commandQueue, matrixCOuputBuffer, CL_TRUE, 0, m*n*sizeof(float), (void*)matrixC, 0, NULL, NULL);
+        errorCode = performIteration(
+            i, context, commandQueue, program, 
+            m, n, k, 
+            matrixAInputBuffer, matrixBInputBuffer, matrixCOutputBuffer,
+            matrixA, matrixB, matrixC, 
+            times);
     }
 
     checkWithReferenceMatrix(m, n, k, matrixA, matrixB, matrixC);
@@ -169,12 +206,13 @@ int main (int argc, char* argv[]) {
     free(matrixB);
     free(matrixC);
 
-    cl_ulong timeSum = 0;
 
+
+    /* Calculating Average Time and Standard Deviation */
+    cl_ulong timeSum = 0;
     for(int i = 0; i < numberOfRuns; i++) { 
         timeSum += times[i];
     }
-
     double averageTime = timeSum/numberOfRuns;
 
     double squareDifferenceSum = 0;
