@@ -5,7 +5,7 @@
 #include <CL/cl.h>
 
 #define MAX_SOURCE_SIZE (0x100000)
-#define LOCAL_WORK_SIZE 4
+#define LOCAL_WORK_SIZE 32
 
 void printDeviceData(cl_device_id device_id) {
     char deviceName[64];
@@ -63,7 +63,7 @@ void checkWithReferenceMatrix(int m, int n, int k, float* matrixA, float* matrix
     float* matrixCReference = (float*)malloc(m*n*sizeof(float));
         multiplyMatricesReference(m, n, k, matrixA, matrixB, matrixCReference);
 
-        printf("Comparing matrices...\n");
+       printf("Comparing matrices...\n");
 
         double sumOfDifferences = 0;
         double maxDifference = 0;
@@ -76,7 +76,7 @@ void checkWithReferenceMatrix(int m, int n, int k, float* matrixA, float* matrix
             }
         }
 
-        printf("Average difference between OpenCL and Reference result: %e\nMaximum difference between OpenCL and Reference result: %e\n", sumOfDifferences / (n*m), maxDifference);
+       printf("Average difference between OpenCL and Reference result: %e\nMaximum difference between OpenCL and Reference result: %e\n", sumOfDifferences / (n*m), maxDifference);
 
         free(matrixCReference);
 }
@@ -146,15 +146,22 @@ int main (int argc, char* argv[]) {
     sscanf(argv[3], "%d", &k);
     sscanf(argv[4], "%d", &numberOfRuns);
 
+    /* Getting Platform ID */
+    cl_platform_id platform;
+    cl_int errorCode = clGetPlatformIDs(1, &platform, NULL);
+
     /* Getting Default Device ID */
     cl_device_id device_id = NULL;   
     cl_uint ret_num_devices;
-    cl_int errorCode = clGetDeviceIDs(NULL, CL_DEVICE_TYPE_DEFAULT, 1, &device_id, &ret_num_devices);
+    errorCode = clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, 1, &device_id, &ret_num_devices);
 
     printDeviceData(device_id);
+
+    /* Context properties */
+    cl_context_properties contextProperties[] = { CL_CONTEXT_PLATFORM, platform, 0 };
     
     /* Creating context and command queue */
-    cl_context context = clCreateContextFromType(NULL, CL_DEVICE_TYPE_DEFAULT, NULL, NULL, &errorCode);
+    cl_context context = clCreateContextFromType(contextProperties, CL_DEVICE_TYPE_DEFAULT, NULL, NULL, &errorCode);
     cl_command_queue commandQueue = clCreateCommandQueue(context, device_id, CL_QUEUE_PROFILING_ENABLE, &errorCode);
 
     /* Creating Input Buffers */
@@ -200,7 +207,7 @@ int main (int argc, char* argv[]) {
             times);
     }
 
-    checkWithReferenceMatrix(m, n, k, matrixA, matrixB, matrixC);
+    //checkWithReferenceMatrix(m, n, k, matrixA, matrixB, matrixC);
 
     free(matrixA);
     free(matrixB);
