@@ -206,8 +206,6 @@ int main (int argc, char* argv[]) {
     free(matrixB);
     free(matrixC);
 
-
-
     /* Calculating Average Time and Standard Deviation */
     cl_ulong timeSum = 0;
     for(int i = 0; i < numberOfRuns; i++) { 
